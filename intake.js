@@ -4,7 +4,8 @@
   const base=local?location.origin:form.dataset.apiBase;
   const steps=[...form.querySelectorAll('.form-step')],progress=[...document.querySelectorAll('[data-step-label]')];
   const errors=document.querySelector('#inquiry-errors');
-  let step=0,token='',widget=null,ready=false,busy=false;
+  let step=0,token='',widget=null,ready=false,busy=false,securityConfig=null,widgetSize='',widgetGeneration=0;
+  const security=document.querySelector('#inquiry-security');
   const requestId=crypto.randomUUID();
   form.noValidate=true;
   form.dataset.enhanced='true';
@@ -18,17 +19,34 @@
     for(const [name,text] of Object.entries(fields)){const hint=form.querySelector(`[data-error-for="${name}"]`);if(hint)hint.textContent=text;const input=form.elements.namedItem(name);if(input?.setAttribute)input.setAttribute('aria-invalid','true');}
     errors.focus();
   }
-  function go(next){step=next;steps.forEach((el,i)=>el.hidden=i!==step);progress.forEach((el,i)=>{el.classList.toggle('current',i===step);el.setAttribute('aria-current',i===step?'step':'false');});const legend=steps[step].querySelector('legend');legend.tabIndex=-1;legend.focus();}
+  function go(next){step=next;steps.forEach((el,i)=>el.hidden=i!==step);progress.forEach((el,i)=>{el.classList.toggle('current',i===step);el.setAttribute('aria-current',i===step?'step':'false');});const legend=steps[step].querySelector('legend');legend.tabIndex=-1;legend.focus();fitSecurity();}
   function validCurrent(){const invalid=[...steps[step].querySelectorAll('input,select,textarea')].find(el=>!el.checkValidity());if(invalid){invalid.reportValidity();invalid.focus();return false;}return true;}
   form.querySelector('.form-next').addEventListener('click',()=>{clearErrors();if(validCurrent())go(1);});
   form.querySelector('.back-link').addEventListener('click',()=>{clearErrors();go(0);});
   form.addEventListener('keydown',event=>{if(event.key==='Enter'&&step===0&&event.target.tagName!=='TEXTAREA'){event.preventDefault();form.querySelector('.form-next').click();}});
+  // Compact is 150px wide; flexible still has a 300px minimum. Measure only
+  // the visible container, and keep compact after a resize to avoid churn.
+  function fitSecurity(){
+    if(local||!securityConfig||!window.turnstile||busy||form.hidden)return;
+    const width=security.getBoundingClientRect().width;if(width<=0)return;
+    const size=width<300?'compact':'normal';
+    if(widget!==null&&(widgetSize==='compact'||size===widgetSize))return;
+    const generation=++widgetGeneration;token='';ready=false;
+    if(widget!==null)window.turnstile.remove(widget);
+    widgetSize=size;
+    widget=window.turnstile.render('#inquiry-security',{sitekey:securityConfig.siteKey,action:'matter-inquiry',theme:'light',size,
+      callback:value=>{if(generation===widgetGeneration){token=value;ready=true;}},
+      'expired-callback':()=>{if(generation===widgetGeneration){token='';ready=false;}},
+      'error-callback':()=>{if(generation===widgetGeneration){token='';ready=false;}}});
+  }
+  if(typeof ResizeObserver==='function')new ResizeObserver(fitSecurity).observe(security);
+  else window.addEventListener('resize',fitSecurity);
   async function setup(){
     if(local){token='local-preview';ready=true;return;}
     try{
       const response=await fetch(base+'/v1/config',{cache:'no-store',redirect:'error',signal:AbortSignal.timeout(10000)});
       if(!response.ok)throw new Error();const config=await response.json();if(!config.siteKey)throw new Error();
-      window.crownInquiryReady=()=>{widget=window.turnstile.render('#inquiry-security',{sitekey:config.siteKey,action:'matter-inquiry',theme:'light',callback:value=>{token=value;ready=true;},'expired-callback':()=>{token='';ready=false;},'error-callback':()=>{token='';ready=false;}});};
+      securityConfig=config;window.crownInquiryReady=fitSecurity;
       const script=document.createElement('script');script.src='https://challenges.cloudflare.com/turnstile/v0/api.js?onload=crownInquiryReady&render=explicit';script.async=true;script.defer=true;script.onerror=()=>{ready=false;};document.head.append(script);
     }catch{ready=false;}
   }
@@ -49,6 +67,6 @@
       if(!result.reference||result.status!=='awaiting_review')throw new Error();
       form.hidden=true;document.querySelector('.form-progress').hidden=true;const receipt=document.querySelector('#inquiry-receipt');document.querySelector('#receipt-reference').textContent=result.reference;receipt.hidden=false;receipt.focus();
     }catch{showError('Your inquiry was not confirmed. Your entries are still here. Try again, or email nick.harris@crownhudsonlaw.com.');}
-    finally{busy=false;submit.disabled=false;submit.firstChild.textContent='Send my inquiry ';form.removeAttribute('aria-busy');}
+    finally{busy=false;submit.disabled=false;submit.firstChild.textContent='Send my inquiry ';form.removeAttribute('aria-busy');fitSecurity();}
   });
 })();
